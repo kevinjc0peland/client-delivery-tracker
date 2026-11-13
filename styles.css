@@ -7,3 +7,10 @@ button,input,textarea,select{font-family:Arial,Helvetica,sans-serif}
 .card{min-width:0;overflow-wrap:anywhere}.card-row>*{min-width:0}.form-field{min-width:0}.form-field input,.form-field textarea,.form-field select{min-width:0;max-width:100%}
 .table-scroll{max-width:100%;overflow-x:auto;border-radius:13px;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch}.table-scroll:focus-visible{outline:3px solid var(--navy);outline-offset:3px}.list-table td{overflow-wrap:anywhere}
 @media(max-width:640px){.sidebar nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;overflow:visible}.nav-link{white-space:normal;min-height:44px;min-width:0;display:flex;align-items:center;font-size:13px}.toolbar{flex-wrap:wrap;align-items:flex-start}.toolbar .search{max-width:none}.list-table{display:table;min-width:660px;width:100%;white-space:normal;table-layout:fixed}.list-table th,.list-table td{padding:12px;white-space:normal}.list-table th:last-child{width:90px}.table-scroll{margin-bottom:4px}.inline-select{max-width:100%}}
+
+/* Optional client details: readable labels and wrapping contact values. */
+.form-field label[for^="client"]{font-family:Arial,Helvetica,sans-serif;text-transform:uppercase;letter-spacing:.07em}
+.form-field input,.form-field textarea,.form-field select{min-height:44px;min-width:0;max-width:100%}
+.client-detail>:last-child{min-width:0;overflow-wrap:anywhere;text-align:right}
+.client-detail a{color:var(--navy)}
+.mailing-address{white-space:pre-wrap}
