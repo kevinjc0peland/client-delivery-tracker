@@ -60,3 +60,10 @@ Temporary public preview hosted for 7 days; anyone with its link can open it. Us
 - Added an optional Last name input immediately after the unchanged Name field in client add/edit forms. Client card headings append it with a space when present and render exactly as before when absent; values remain escaped.
 - Client search now matches last names as well as existing name, offer and email fields.
 - Last name follows the existing optional-string import rules (up to 20,000 characters); older backups without it still import, and JSON exports/imports preserve it. Other validation strictness is unchanged. The field reuses the existing Arial uppercase label styling and 44px minimum input target.
+
+## Search, payment and phone-width QA fixes — November 12, 2026
+
+- Client search distinguishes an unmatched query from a genuinely empty client list: it shows "No matching clients found." and a Clear search action that restores the full list. The original zero-client state is unchanged; name, last name, offer and email search remain supported.
+- Payment handoffs require an amount before saving, with inline feedback for a blank value. Legacy blank amounts show "Amount not set" in payment tables and Overview; an explicitly entered zero remains valid. Existing strict import validation and legacy-backup compatibility are preserved.
+- Phone-width controls have 44px minimum targets, modal/card actions wrap, and toast width stays within the screen. Browser-frame checks at 390px and 360px covered all six navigation sections, all five forms, stacked cards, and horizontally scrollable labeled keyboard-focusable workflow table regions without unexpected page overflow. A physical-phone check remains necessary.
+- Regression checks covered last-name display/search, old backups, export/import round trips and invalid-import rejection with storage unchanged. Only placeholder data was used and cleared after testing.
