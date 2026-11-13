@@ -48,3 +48,9 @@ Temporary public preview hosted for 7 days; anyone with its link can open it. Us
 - Clients remain cards, not a table. Cards wrap long text. Tables have a labelled keyboard-focusable horizontal-scroll region; at phone widths the table has a 660px minimum and wrapped cells, containing scroll without widening the page. Search/add toolbars wrap.
 - Preview-only visible note: Temporary preview - test data only. It is omitted from the permanent-deploy index.html download.
 - All eight round-one safety fixes and the same localStorage key remain in place. The existing session-editing, orphan-cleanup and testimonial-consent limitations are unchanged.
+
+## Optional client details — November 12, 2026
+
+- Client add/edit forms support optional email, multi-line physical mailing address and birthday. Email is displayed as a mailto link, addresses preserve line breaks, and birthdays use the existing local-date formatter. Missing values on older records are safe.
+- Email and address import as optional strings (20,000-character limit, no strict email format); birthday is empty or a real YYYY-MM-DD date. Missing fields normalize to empty strings. All other strict import checks remain unchanged.
+- Contact details persist locally and are included in JSON exports/imports. Form labels retain Arial uppercase styling and letter spacing, inputs have 44px minimum targets, and client details wrap on phone-width cards. These personal details remain unencrypted browser-local data; avoid sensitive information and protect exported backups.
