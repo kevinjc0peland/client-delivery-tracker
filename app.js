@@ -1,0 +1,142 @@
+const STORAGE_KEY = 'clientDeliveryTracker.v1';
+const localDate = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+const today = () => localDate();
+const uid = (prefix) => `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,7)}`;
+const createBlankData = () => ({ clients: [], sessions: [], followups: [], payments: [], testimonials: [] });
+let data = loadData();
+let currentView = 'overview';
+
+// Validate into a new object; never merge untrusted JSON into live state.
+function validateBackup(input){
+ const schemas={
+ clients:{text:['name','email','offer','stage','status'],dates:['startDate'],required:['name'],enums:{stage:['Inquiry','Onboarding','Active delivery','Follow-up','Complete'],status:['Active','Complete','On hold']}},
+ sessions:{text:['clientId','focus','observations','commitment'],dates:['date','nextSession'],required:['clientId','focus','date']},
+ followups:{text:['clientId','title','owner','status','nextAction'],dates:['dueDate'],required:['clientId','title','dueDate'],enums:{status:['Open','In progress','Complete']}},
+ payments:{text:['clientId','status','handoff','note'],dates:['dueDate'],required:['clientId'],enums:{status:['Pending','Sent','Paid','Needs attention']}},
+ testimonials:{text:['clientId','status','permission','quote'],dates:['requestedDate'],required:['clientId'],enums:{status:['Not requested','Requested','Received','Ready to use'],permission:['Not confirmed','Private only','Name approved','Public use approved']}}
+ };
+ const fail=m=>{throw new Error(m);};
+ const plain=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
+ const validDate=v=>{if(!/^\d{4}-\d{2}-\d{2}$/.test(v))return false;const [y,m,d]=v.split('-').map(Number);const dt=new Date(0);dt.setFullYear(y,m-1,d);return y>=1&&dt.getFullYear()===y&&dt.getMonth()===m-1&&dt.getDate()===d;};
+ if(!plain(input))fail('The backup must be a JSON object.');
+ if(Object.keys(input).some(k=>!Object.hasOwn(schemas,k)))fail('Unexpected top-level backup field.');
+ const clean=createBlankData();
+ for(const [group,schema] of Object.entries(schemas)){
+  if(!Array.isArray(input[group]))fail(group+' must be an array.');
+  if(input[group].length>50000)fail(group+' contains too many records.');
+  const ids=new Set();
+  clean[group]=input[group].map((record,i)=>{
+   const at=group+' record '+(i+1)+': ';
+   if(!plain(record))fail(at+'must be an object.');
+   const allowed=['id',...schema.text,...schema.dates,...(group==='clients'?['onboarding']:[]),...(group==='payments'?['amount']:[])];
+   if(Object.keys(record).some(k=>!allowed.includes(k)))fail(at+'unexpected field.');
+   if(typeof record.id!=='string'||!record.id.trim()||record.id.length>120||!/^[-a-zA-Z0-9_]+$/.test(record.id)||ids.has(record.id))fail(at+'invalid or duplicate id.');
+   ids.add(record.id);const row={id:record.id};
+   for(const key of [...schema.text,...schema.dates]){
+    const value=record[key]===undefined?'':record[key];
+    if(typeof value!=='string'||value.length>20000)fail(at+key+' must be a string of at most 20,000 characters.');
+    if(schema.required.includes(key)&&!value.trim())fail(at+key+' is required.');
+    if(key==='clientId'&&(!/^[-a-zA-Z0-9_]+$/.test(value)||value.length>120))fail(at+'invalid clientId.');
+    if(schema.dates.includes(key)&&value&&!validDate(value))fail(at+key+' must be a real YYYY-MM-DD date.');
+    if(schema.enums?.[key]&&value&&!schema.enums[key].includes(value))fail(at+'unrecognized '+key+'.');
+    row[key]=value;
+   }
+   if(group==='clients'){
+    const checks=record.onboarding===undefined?[]:record.onboarding;
+    const options=['Agreement','Welcome sent','Intake complete','First session scheduled'];
+    if(!Array.isArray(checks)||checks.some(x=>typeof x!=='string'||!options.includes(x))||new Set(checks).size!==checks.length)fail(at+'invalid onboarding checklist.');
+    row.onboarding=[...checks];
+   }
+   if(group==='payments'){
+    const a=record.amount===undefined?'':record.amount;
+    if(!['string','number'].includes(typeof a)||(typeof a==='string'&&a!==''&&!/^\d+(\.\d{1,2})?$/.test(a))||!Number.isFinite(Number(a))||Number(a)<0||Number(a)>Number.MAX_SAFE_INTEGER)fail(at+'invalid payment amount.');
+    row.amount=a;
+   }
+   return row;
+  });
+ }
+ return clean;
+}
+function storageWarning(message){
+ let banner=document.getElementById('storageWarning');
+ if(!banner){banner=document.createElement('div');banner.id='storageWarning';banner.className='storage-warning';banner.setAttribute('role','alert');document.querySelector('.main-content').prepend(banner);}
+ banner.textContent=message;
+}
+function loadData(){
+ try{const raw=localStorage.getItem(STORAGE_KEY);return raw===null?createBlankData():validateBackup(JSON.parse(raw));}
+ catch{queueMicrotask(()=>storageWarning('Stored data could not be loaded. It has NOT been overwritten. Export or recover a valid backup before saving new changes.'));return createBlankData();}
+}
+function save(candidate=data){
+ try{localStorage.setItem(STORAGE_KEY,JSON.stringify(candidate));document.getElementById('storageWarning')?.remove();return true;}
+ catch{storageWarning('NOT SAVED: browser storage is unavailable or full. Changes may be lost when this page closes. Export a backup now.');return false;}
+}
+function esc(value=''){ return String(value).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
+function fmtDate(value){ if(!value) return 'Not set'; const d = new Date(`${value}T12:00:00`); return Number.isNaN(d.getTime()) ? esc(value) : d.toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'}); }
+function clientName(id){ return data.clients.find(c=>c.id===id)?.name || 'Unassigned client'; }
+function statusBadge(status){ const s=(status||'').toLowerCase(); const tone=s.includes('paid')||s.includes('complete')||s.includes('approved')||s.includes('ready') ? 'green' : s.includes('overdue')||s.includes('blocked')||s.includes('declined') ? 'red' : s.includes('pending')||s.includes('scheduled')||s.includes('requested')||s.includes('in progress') ? 'amber' : 'blue'; return `<span class="badge ${tone}">${esc(status || 'Open')}</span>`; }
+function empty(title, body){ return `<div class="empty"><strong>${title}</strong>${body}</div>`; }
+function showToast(message){ const t=document.getElementById('toast'); t.textContent=message; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2400); }
+function clientOptions(selected=''){ return `<option value="">Choose a client</option>` + data.clients.map(c=>`<option value="${esc(c.id)}" ${c.id===selected?'selected':''}>${esc(c.name)}</option>`).join(''); }
+function firstUse(){return `<section class="first-use"><h2>Start by adding your first client</h2><p>One client is all it takes to begin. Add a name, then capture the next step when you are ready.</p><button class="primary-button" data-modal="client">+ Add client</button></section>`;}
+function render(){ document.getElementById('pageTitle').textContent = ({overview:'Overview',clients:'Clients',sessions:'Session notes',followups:'Follow-ups',payments:'Payment handoffs',testimonials:'Testimonials'})[currentView]; document.querySelectorAll('.nav-link').forEach(b=>b.classList.toggle('active',b.dataset.view===currentView)); document.getElementById('app').innerHTML = (data.clients.length ? '' : firstUse()) + views[currentView](); bindViewEvents(); }
+
+const views = {
+ overview(){
+  const openFollowups=data.followups.filter(x=>x.status!=='Complete'); const attentionPayments=data.payments.filter(x=>x.status!=='Paid');
+  const activity=[...data.sessions.map(x=>({date:x.date,type:'Session note',title:clientName(x.clientId),detail:x.focus})),...data.followups.map(x=>({date:x.dueDate,type:'Follow-up',title:x.title,detail:clientName(x.clientId)})),...data.payments.map(x=>({date:x.dueDate,type:'Payment handoff',title:`$${x.amount||'0'}`,detail:clientName(x.clientId)}))].sort((a,b)=>(b.date||'').localeCompare(a.date||'')).slice(0,6);
+  return `<div class="callout"><strong>Keep the journey visible.</strong><p>Use this workspace to turn the journey map into consistent next steps, clearer handoffs, and better client follow-through.</p></div>
+   <div class="metrics"><div class="metric-card"><p class="metric-label">Active clients</p><p class="metric-value">${data.clients.filter(c=>c.status!=='Complete').length}</p><p class="metric-note">Across your delivery pipeline</p></div><div class="metric-card"><p class="metric-label">Open follow-ups</p><p class="metric-value">${openFollowups.length}</p><p class="metric-note">Items still needing action</p></div><div class="metric-card"><p class="metric-label">Payment handoffs</p><p class="metric-value">${attentionPayments.length}</p><p class="metric-note">Not marked paid</p></div><div class="metric-card"><p class="metric-label">Testimonials</p><p class="metric-value">${data.testimonials.filter(x=>x.status==='Ready to use').length}</p><p class="metric-note">Ready to become proof</p></div></div>
+   <div class="grid-2"><section class="panel"><div class="panel-header"><h2>Recent delivery activity</h2><button class="small-link" data-go="sessions">View notes</button></div>${activity.length?activity.map(a=>`<div class="timeline-item"><span class="date-dot"></span><div><p class="timeline-title">${esc(a.type)} · ${esc(a.title)}</p><p class="timeline-meta">${fmtDate(a.date)} · ${esc(a.detail||'No detail added')}</p></div></div>`).join(''):empty('Your delivery record starts here','Add a client, then capture the next meaningful handoff.')}</section><section class="panel"><div class="panel-header"><h2>Needs attention</h2><button class="small-link" data-go="followups">View all</button></div>${openFollowups.slice(0,5).length?openFollowups.slice(0,5).map(x=>`<div class="timeline-item"><span class="date-dot"></span><div><p class="timeline-title">${esc(x.title)}</p><p class="timeline-meta">${esc(clientName(x.clientId))} · Due ${fmtDate(x.dueDate)} · ${statusBadge(x.status)}</p></div></div>`).join(''):empty('Nothing waiting','Open follow-ups will appear here.')}</section></div>`;
+ },
+ clients(){ return `<div class="toolbar"><input class="search" id="clientSearch" placeholder="Search clients by name or offer" /><button class="primary-button" data-modal="client">+ Add client</button></div><div id="clientList">${clientCards(data.clients)}</div>`; },
+ sessions(){ return `<div class="toolbar"><div><p class="eyebrow">Make the next session easier</p><h2 style="margin:0;color:var(--navy)">Session notes</h2></div><button class="primary-button" data-modal="session">+ Add session note</button></div>${data.sessions.length?`<div class="table-scroll" role="region" aria-label="Records table; scroll horizontally for all columns" tabindex="0"><table class="list-table"><thead><tr><th>Date</th><th>Client</th><th>Focus</th><th>Commitment / next step</th><th></th></tr></thead><tbody>${data.sessions.sort((a,b)=>b.date.localeCompare(a.date)).map(x=>`<tr><td>${fmtDate(x.date)}</td><td><strong>${esc(clientName(x.clientId))}</strong></td><td>${esc(x.focus||'—')}<br><span class="timeline-meta">${esc(x.observations||'')}</span></td><td>${esc(x.commitment||'—')}<br>${x.nextSession?`<span class="timeline-meta">Next: ${fmtDate(x.nextSession)}</span>`:''}</td><td><button class="mini-button" data-delete="sessions" data-id="${esc(x.id)}">Delete</button></td></tr>`).join('')}</tbody></table></div>`:empty('No session notes yet','Capture what mattered, what the client committed to, and what should happen next.')}`; },
+ followups(){ return `<div class="toolbar"><div><p class="eyebrow">Keep promises visible</p><h2 style="margin:0;color:var(--navy)">Follow-ups</h2></div><button class="primary-button" data-modal="followup">+ Add follow-up</button></div>${data.followups.length?`<div class="table-scroll" role="region" aria-label="Records table; scroll horizontally for all columns" tabindex="0"><table class="list-table"><thead><tr><th>Due</th><th>Client</th><th>Follow-up</th><th>Owner</th><th>Status</th><th></th></tr></thead><tbody>${data.followups.sort((a,b)=>(a.dueDate||'').localeCompare(b.dueDate||'')).map(x=>`<tr><td>${fmtDate(x.dueDate)}</td><td>${esc(clientName(x.clientId))}</td><td><strong>${esc(x.title)}</strong><br><span class="timeline-meta">${esc(x.nextAction||'')}</span></td><td>${esc(x.owner||'You')}</td><td><select class="inline-select" data-status="followups" data-id="${esc(x.id)}"><option ${x.status==='Open'?'selected':''}>Open</option><option ${x.status==='In progress'?'selected':''}>In progress</option><option ${x.status==='Complete'?'selected':''}>Complete</option></select></td><td><button class="mini-button" data-delete="followups" data-id="${esc(x.id)}">Delete</button></td></tr>`).join('')}</tbody></table></div>`:empty('No follow-ups yet','Turn a session commitment or client handoff into a visible next action.')}`; },
+ payments(){ return `<div class="toolbar"><div><p class="eyebrow">Make the handoff clear</p><h2 style="margin:0;color:var(--navy)">Payment handoffs</h2></div><button class="primary-button" data-modal="payment">+ Add payment handoff</button></div>${data.payments.length?`<div class="table-scroll" role="region" aria-label="Records table; scroll horizontally for all columns" tabindex="0"><table class="list-table"><thead><tr><th>Due</th><th>Client</th><th>Amount</th><th>Handoff step</th><th>Status</th><th></th></tr></thead><tbody>${data.payments.sort((a,b)=>(a.dueDate||'').localeCompare(b.dueDate||'')).map(x=>`<tr><td>${fmtDate(x.dueDate)}</td><td>${esc(clientName(x.clientId))}</td><td><strong>$${esc(x.amount||'0')}</strong></td><td>${esc(x.handoff||'—')}</td><td><select class="inline-select" data-status="payments" data-id="${esc(x.id)}"><option ${x.status==='Pending'?'selected':''}>Pending</option><option ${x.status==='Sent'?'selected':''}>Sent</option><option ${x.status==='Paid'?'selected':''}>Paid</option><option ${x.status==='Needs attention'?'selected':''}>Needs attention</option></select></td><td><button class="mini-button" data-delete="payments" data-id="${esc(x.id)}">Delete</button></td></tr>`).join('')}</tbody></table></div>`:empty('No payment handoffs yet','Track the next administrative step without turning the client relationship into a spreadsheet.')}`; },
+ testimonials(){ return `<div class="toolbar"><div><p class="eyebrow">Capture the client voice</p><h2 style="margin:0;color:var(--navy)">Testimonials</h2></div><button class="primary-button" data-modal="testimonial">+ Add testimonial</button></div><div class="cards-grid">${data.testimonials.length?data.testimonials.map(x=>`<article class="card"><div class="panel-header"><h3>${esc(clientName(x.clientId))}</h3>${statusBadge(x.status)}</div><p class="subtle">Requested ${fmtDate(x.requestedDate)}${x.permission?' · Permission: '+esc(x.permission):''}</p><p>${x.quote?`“${esc(x.quote)}”`:'No quote captured yet.'}</p><div class="action-row"><select class="inline-select" data-status="testimonials" data-id="${esc(x.id)}"><option ${x.status==='Not requested'?'selected':''}>Not requested</option><option ${x.status==='Requested'?'selected':''}>Requested</option><option ${x.status==='Received'?'selected':''}>Received</option><option ${x.status==='Ready to use'?'selected':''}>Ready to use</option></select><button class="mini-button" data-delete="testimonials" data-id="${esc(x.id)}">Delete</button></div></article>`).join(''):empty('No testimonials yet','Create a respectful request after a clear client win, then record permission before using the story.')}</div>`; }
+};
+
+function clientCards(list){ if(!list.length) return empty('No clients yet','Add your first client to begin turning the journey map into a working delivery rhythm.'); return `<div class="cards-grid">${list.map(c=>`<article class="card"><div class="panel-header"><h3>${esc(c.name)}</h3>${statusBadge(c.status)}</div><p class="subtle">${esc(c.email||'No email')} · Started ${fmtDate(c.startDate)}</p><div class="card-row"><span>Offer</span><strong>${esc(c.offer||'Not set')}</strong></div><div class="card-row"><span>Journey stage</span><span>${esc(c.stage||'Onboarding')}</span></div><div class="card-row"><span>Onboarding</span><span>${c.onboarding?.filter(Boolean).length||0}/4 complete</span></div><div class="action-row" style="margin-top:14px"><button class="mini-button" data-modal="client" data-edit="${esc(c.id)}">Edit</button><button class="mini-button" data-delete="clients" data-id="${esc(c.id)}">Delete</button></div></article>`).join('')}</div>`; }
+
+function openModal(type, editId){ const modal=document.getElementById('modalBackdrop'); const body=document.getElementById('modalBody'); document.getElementById('modalTitle').textContent=({client:editId?'Edit client':'Add client',session:'Add session note',followup:'Add follow-up',payment:'Add payment handoff',testimonial:'Add testimonial'})[type]; const existing=editId?data.clients.find(x=>x.id===editId):{};
+ const fields={
+ client:`<form data-form="client" data-edit="${esc(editId||'')}"><div class="form-grid"><div class="form-field"><label>Name *</label><input name="name" required value="${esc(existing.name||'')}" placeholder="Client name" /></div><div class="form-field"><label>Email</label><input name="email" type="email" value="${esc(existing.email||'')}" placeholder="client@example.com" /></div><div class="form-field"><label>Offer or package</label><input name="offer" value="${esc(existing.offer||'')}" placeholder="Coaching intensive" /></div><div class="form-field"><label>Start date</label><input name="startDate" type="date" value="${esc(existing.startDate||today())}" /></div><div class="form-field"><label>Journey stage</label><select name="stage"><option>Inquiry</option><option ${existing.stage==='Onboarding'?'selected':''}>Onboarding</option><option ${existing.stage==='Active delivery'?'selected':''}>Active delivery</option><option ${existing.stage==='Follow-up'?'selected':''}>Follow-up</option><option ${existing.stage==='Complete'?'selected':''}>Complete</option></select></div><div class="form-field"><label>Status</label><select name="status"><option ${existing.status==='Active'?'selected':''}>Active</option><option ${existing.status==='Complete'?'selected':''}>Complete</option><option ${existing.status==='On hold'?'selected':''}>On hold</option></select></div><div class="form-field full"><label>Onboarding checklist</label><div class="action-row">${['Agreement','Welcome sent','Intake complete','First session scheduled'].map(item=>`<label style="font-size:12px;color:var(--muted)"><input type="checkbox" name="onboarding" value="${esc(item)}" ${(existing.onboarding||[]).includes(item)?'checked':''}/> ${esc(item)}</label>`).join('')}</div></div></div><div class="form-actions"><button type="button" class="secondary-button" data-close>Cancel</button><button class="primary-button">Save client</button></div></form>`,
+ session:`<form data-form="session"><div class="form-grid"><div class="form-field"><label>Client *</label><select name="clientId" required>${clientOptions()}</select></div><div class="form-field"><label>Date *</label><input name="date" type="date" required value="${esc(today())}" /></div><div class="form-field full"><label>Session focus *</label><input name="focus" required placeholder="What was this session designed to move forward?" /></div><div class="form-field full"><label>Observations</label><textarea name="observations" placeholder="What did you notice about the client's context, energy, or progress?"></textarea></div><div class="form-field full"><label>Client commitment / next step</label><textarea name="commitment" placeholder="What will the client do before the next touchpoint?"></textarea></div><div class="form-field"><label>Next session</label><input name="nextSession" type="date" /></div></div><div class="form-actions"><button type="button" class="secondary-button" data-close>Cancel</button><button class="primary-button">Save note</button></div></form>`,
+ followup:`<form data-form="followup"><div class="form-grid"><div class="form-field"><label>Client *</label><select name="clientId" required>${clientOptions()}</select></div><div class="form-field"><label>Due date *</label><input name="dueDate" type="date" required value="${esc(today())}" /></div><div class="form-field full"><label>Follow-up *</label><input name="title" required placeholder="Send recap and resource" /></div><div class="form-field"><label>Owner</label><input name="owner" value="You" /></div><div class="form-field"><label>Status</label><select name="status"><option>Open</option><option>In progress</option><option>Complete</option></select></div><div class="form-field full"><label>Next action</label><textarea name="nextAction" placeholder="What specifically needs to happen?"></textarea></div></div><div class="form-actions"><button type="button" class="secondary-button" data-close>Cancel</button><button class="primary-button">Save follow-up</button></div></form>`,
+ payment:`<form data-form="payment"><div class="form-grid"><div class="form-field"><label>Client *</label><select name="clientId" required>${clientOptions()}</select></div><div class="form-field"><label>Amount</label><input name="amount" type="number" min="0" step="0.01" placeholder="900" /></div><div class="form-field"><label>Due date</label><input name="dueDate" type="date" value="${esc(today())}" /></div><div class="form-field"><label>Status</label><select name="status"><option>Pending</option><option>Sent</option><option>Paid</option><option>Needs attention</option></select></div><div class="form-field full"><label>Handoff step</label><input name="handoff" placeholder="Confirm invoice, send payment link, or reconcile receipt" /></div><div class="form-field full"><label>Internal note</label><textarea name="note" placeholder="Keep the administrative context clear and brief."></textarea></div></div><div class="form-actions"><button type="button" class="secondary-button" data-close>Cancel</button><button class="primary-button">Save handoff</button></div></form>`,
+ testimonial:`<form data-form="testimonial"><div class="form-grid"><div class="form-field"><label>Client *</label><select name="clientId" required>${clientOptions()}</select></div><div class="form-field"><label>Requested date</label><input name="requestedDate" type="date" value="${esc(today())}" /></div><div class="form-field"><label>Status</label><select name="status"><option>Not requested</option><option>Requested</option><option>Received</option><option>Ready to use</option></select></div><div class="form-field"><label>Permission</label><select name="permission"><option>Not confirmed</option><option>Private only</option><option>Name approved</option><option>Public use approved</option></select></div><div class="form-field full"><label>Quote or story</label><textarea name="quote" placeholder="Capture the client's own words, not a rewritten claim."></textarea></div></div><div class="form-actions"><button type="button" class="secondary-button" data-close>Cancel</button><button class="primary-button">Save testimonial</button></div></form>`}; body.innerHTML=fields[type]; modal.classList.remove('hidden'); body.querySelector('form')?.addEventListener('submit', e=>submitForm(e,type,editId)); body.querySelectorAll('[data-close]').forEach(b=>b.addEventListener('click',closeModal)); }
+function closeModal(){document.getElementById('modalBackdrop').classList.add('hidden');}
+function submitForm(e,type,editId){ e.preventDefault(); const fd=new FormData(e.target); const obj=Object.fromEntries(fd.entries()); if(type==='client'){obj.onboarding=fd.getAll('onboarding'); if(editId){Object.assign(data.clients.find(x=>x.id===editId),obj);}else{data.clients.push({id:uid('cli'),...obj});}} else { const collection={session:'sessions',followup:'followups',payment:'payments',testimonial:'testimonials'}[type]; data[collection].push({id:uid(type.slice(0,3)),...obj}); } const saved=save(); closeModal(); render(); if(saved)showToast(type==='client'?'Client saved':'Record saved'); }
+let viewEventsBound=false;
+function bindViewEvents(){
+ if(viewEventsBound)return;viewEventsBound=true;
+ const app=document.getElementById('app');
+ app.addEventListener('click',e=>{
+  const b=e.target.closest('[data-modal],[data-go],[data-delete]');if(!b||!app.contains(b))return;
+  if(b.dataset.modal)openModal(b.dataset.modal,b.dataset.edit);
+  else if(b.dataset.go){currentView=b.dataset.go;render();}
+  else if(b.dataset.delete&&confirm('Delete this record?')){data[b.dataset.delete]=data[b.dataset.delete].filter(x=>x.id!==b.dataset.id);const saved=save();render();if(saved)showToast('Record deleted');}
+ });
+ app.addEventListener('change',e=>{const s=e.target.closest('[data-status]');if(!s)return;const item=data[s.dataset.status].find(x=>x.id===s.dataset.id);if(item){item.status=s.value;if(save())showToast('Status updated');}});
+ app.addEventListener('input',e=>{if(e.target.id!=='clientSearch')return;const q=e.target.value.toLowerCase();document.getElementById('clientList').innerHTML=clientCards(data.clients.filter(c=>[c.name,c.offer,c.email].join(' ').toLowerCase().includes(q)));});
+}
+document.querySelectorAll('.nav-link').forEach(b=>b.addEventListener('click',()=>{currentView=b.dataset.view;render();}));
+document.getElementById('quickAddBtn').addEventListener('click',()=>openModal('client'));
+document.getElementById('closeModal').addEventListener('click',closeModal);
+document.getElementById('modalBackdrop').addEventListener('click',e=>{if(e.target.id==='modalBackdrop')closeModal();});
+function downloadBackup(snapshot,prefix='client-delivery-backup'){
+ const blob=new Blob([JSON.stringify(snapshot,null,2)],{type:'application/json'});
+ const url=URL.createObjectURL(blob),a=document.createElement('a');
+ const time=new Date();const clock=[time.getHours(),time.getMinutes(),time.getSeconds()].map(x=>String(x).padStart(2,'0')).join('-');
+ a.href=url;a.download=prefix+'-'+localDate(time)+'-'+clock+'.json';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
+}
+function replaceFromJSON(text){
+ let incoming;try{incoming=validateBackup(JSON.parse(text));}catch(error){alert('Import rejected. Existing data was not changed. '+error.message);return false;}
+ if(!confirm('Import REPLACES ALL current tracker data. A dated safety backup will download first. Continue?'))return false;
+ try{downloadBackup(data,'client-delivery-safety');}catch{alert('Import stopped: the safety backup could not be started. Existing data was not changed.');return false;}
+ if(!save(incoming))return false;
+ data=incoming;render();showToast('Backup imported; safety backup download started');return true;
+}
+document.getElementById('exportBtn').addEventListener('click',()=>{try{downloadBackup(data);showToast('Backup download started');}catch{storageWarning('Backup download could not be started. Please try again.');}});
+document.getElementById('importInput').addEventListener('change',async e=>{const file=e.target.files[0];if(!file)return;try{if(file.size>20000000)throw new Error('Backup exceeds the 20 MB limit.');replaceFromJSON(await file.text());}catch(error){alert('Import rejected. Existing data was not changed. '+error.message);}finally{e.target.value='';}});
+document.getElementById('clearBtn').addEventListener('click',()=>{if(confirm('Clear all locally stored tracker data? This cannot be undone unless you have an export.')){const empty=createBlankData();if(save(empty)){data=empty;render();showToast('Local data cleared');}}});
+render();
