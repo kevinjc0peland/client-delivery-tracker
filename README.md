@@ -54,3 +54,9 @@ Temporary public preview hosted for 7 days; anyone with its link can open it. Us
 - Client add/edit forms support optional email, multi-line physical mailing address and birthday. Email is displayed as a mailto link, addresses preserve line breaks, and birthdays use the existing local-date formatter. Missing values on older records are safe.
 - Email and address import as optional strings (20,000-character limit, no strict email format); birthday is empty or a real YYYY-MM-DD date. Missing fields normalize to empty strings. All other strict import checks remain unchanged.
 - Contact details persist locally and are included in JSON exports/imports. Form labels retain Arial uppercase styling and letter spacing, inputs have 44px minimum targets, and client details wrap on phone-width cards. These personal details remain unencrypted browser-local data; avoid sensitive information and protect exported backups.
+
+## Optional last name — November 12, 2026
+
+- Added an optional Last name input immediately after the unchanged Name field in client add/edit forms. Client card headings append it with a space when present and render exactly as before when absent; values remain escaped.
+- Client search now matches last names as well as existing name, offer and email fields.
+- Last name follows the existing optional-string import rules (up to 20,000 characters); older backups without it still import, and JSON exports/imports preserve it. Other validation strictness is unchanged. The field reuses the existing Arial uppercase label styling and 44px minimum input target.
